@@ -1,0 +1,136 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.svm import SVC
+from sklearn.metrics import confusion_matrix
+import time 
+
+# Carregamento dos dados
+arquivo_csv = '/content/drive/MyDrive/2024.1/Reconhecimento de Padrões/Tds/TD Final /fetal_health.csv'
+dados = pd.read_csv(arquivo_csv)
+
+# Separação de atributos (X) e rótulo (y)
+X = dados.iloc[:, :-1].values
+y = dados.iloc[:, -1].values
+
+# Normalização dos dados
+X = (X - np.min(X, axis=0)) / (np.max(X, axis=0) - np.min(X, axis=0))
+
+# Divisão entre treino e teste (80% treino, 20% teste)
+X_treino, X_teste, y_treino, y_teste = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Função para calcular as métricas manualmente
+def calcular_metricas(y_verdadeiro, y_pred, num_classes=3):
+    matriz_confusao = confusion_matrix(y_verdadeiro, y_pred, labels=[1, 2, 3])
+    acuracia = np.trace(matriz_confusao) / np.sum(matriz_confusao)
+
+    revocacao_por_classe = []
+    precisao_por_classe = []
+    for i in range(num_classes):
+        TP = matriz_confusao[i, i]
+        FN = np.sum(matriz_confusao[i, :]) - TP
+        FP = np.sum(matriz_confusao[:, i]) - TP
+        TN = np.sum(matriz_confusao) - (TP + FP + FN)
+
+        revocacao = TP / (TP + FN) if (TP + FN) > 0 else 0
+        precisao = TP / (TP + FP) if (TP + FP) > 0 else 0
+
+        revocacao_por_classe.append(revocacao)
+        precisao_por_classe.append(precisao)
+
+    revocacao_media = np.mean(revocacao_por_classe)
+    precisao_media = np.mean(precisao_por_classe)
+    f1_score_media = 2 * (precisao_media * revocacao_media) / (precisao_media + revocacao_media) if (precisao_media + revocacao_media) > 0 else 0
+
+    return acuracia, revocacao_media, precisao_media, f1_score_media
+
+# Definição dos parâmetros para o Grid Search personalizado
+C_values = [2**i for i in range(-5, 16, 2)]
+gamma_values = [2**i for i in range(-15, 4, 2)]
+melhor_f1_score = -1
+melhores_hiperparametros = None
+
+# Início da contagem de tempo
+start_time = time.time()
+
+# Grid Search personalizado para encontrar os melhores hiperparâmetros
+for C in C_values:
+    for gamma in gamma_values:
+        matriz_metricas_folds = np.zeros((10, 4))
+        indices = np.arange(len(X_treino))
+        np.random.shuffle(indices)
+        tamanho_fold = len(X_treino) // 10
+
+        for fold in range(10):
+            inicio_teste = fold * tamanho_fold
+            fim_teste = (fold + 1) * tamanho_fold if fold != 9 else len(X_treino)
+            teste_idx = indices[inicio_teste:fim_teste]
+            treino_idx = np.concatenate([indices[:inicio_teste], indices[fim_teste:]])
+
+            X_train_fold, X_val_fold = X_treino[treino_idx], X_treino[teste_idx]
+            y_train_fold, y_val_fold = y_treino[treino_idx], y_treino[teste_idx]
+
+            modelo_svm = SVC(C=C, gamma=gamma, kernel='rbf')
+            modelo_svm.fit(X_train_fold, y_train_fold)
+
+            y_pred = modelo_svm.predict(X_val_fold)
+            acuracia, revocacao, precisao, f1_score_val = calcular_metricas(y_val_fold, y_pred)
+            matriz_metricas_folds[fold] = [acuracia, revocacao, precisao, f1_score_val]
+
+        media_f1_score = np.mean(matriz_metricas_folds[:, 3])
+
+        if media_f1_score > melhor_f1_score:
+            melhor_f1_score = media_f1_score
+            melhores_hiperparametros = (C, gamma)
+
+# Fim da contagem de tempo
+end_time = time.time()
+execution_time = end_time - start_time
+
+# Exibir os melhores hiperparâmetros e o tempo de execução
+print(f"Melhores Hiperparâmetros: C = {melhores_hiperparametros[0]}, Gamma = {melhores_hiperparametros[1]}")
+print(f"Tempo de execução do treinamento: {execution_time:.2f} segundos")
+
+# Treinamento do modelo final com os melhores hiperparâmetros
+modelo_final_svm = SVC(C=melhores_hiperparametros[0], gamma=melhores_hiperparametros[1], kernel='rbf')
+modelo_final_svm.fit(X_treino, y_treino)
+
+# Avaliação do modelo com o conjunto de treino
+y_pred_treino = modelo_final_svm.predict(X_treino)
+acuracia_treino, revocacao_treino, precisao_treino, f1_score_treino = calcular_metricas(y_treino, y_pred_treino)
+
+# Avaliação do modelo com o conjunto de teste
+y_pred_teste = modelo_final_svm.predict(X_teste)
+acuracia_teste, revocacao_teste, precisao_teste, f1_score_teste = calcular_metricas(y_teste, y_pred_teste)
+
+# Exibição dos resultados
+print("\nResultados do Modelo SVM (80% Conjunto de Treino):")
+print(f"Acurácia: {acuracia_treino:.2f}")
+print(f"Revocação: {revocacao_treino:.2f}")
+print(f"Precisão: {precisao_treino:.2f}")
+print(f"F1-Score: {f1_score_treino:.2f}")
+
+print("\nResultados do Modelo SVM (20% Conjunto de Teste):")
+print(f"Acurácia: {acuracia_teste:.2f}")
+print(f"Revocação: {revocacao_teste:.2f}")
+print(f"Precisão: {precisao_teste:.2f}")
+print(f"F1-Score: {f1_score_teste:.2f}")
+
+# Plotando a matriz de confusão
+def plotar_matriz_confusao(matriz_confusao, titulo):
+    plt.figure(figsize=(10, 7))
+    sns.heatmap(matriz_confusao, annot=True, fmt='d', cmap='Blues', xticklabels=[1, 2, 3], yticklabels=[1, 2, 3])
+    plt.ylabel('Classe Verdadeira')
+    plt.xlabel('Classe Predita')
+    plt.title(titulo)
+    plt.show()
+
+# Matriz de confusão para o conjunto de treino
+matriz_confusao_treino = confusion_matrix(y_treino, y_pred_treino, labels=[1, 2, 3])
+plotar_matriz_confusao(matriz_confusao_treino, 'Matriz de Confusão - SVM (80% Conjunto de Treino)')
+
+# Matriz de confusão para o conjunto de teste
+matriz_confusao_teste = confusion_matrix(y_teste, y_pred_teste, labels=[1, 2, 3])
+plotar_matriz_confusao(matriz_confusao_teste, 'Matriz de Confusão - SVM (20% Conjunto de Teste)')
