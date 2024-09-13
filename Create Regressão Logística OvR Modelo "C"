@@ -1,0 +1,142 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix
+import time 
+
+# Definição da classe RegressaoLogistica
+class RegressaoLogistica:
+    def __init__(self):
+        self.pesos = None
+        self.bias = 0
+
+    def normalizar_dados(self, X):
+        return (X - np.min(X, axis=0)) / (np.max(X, axis=0) - np.min(X, axis=0))
+
+    def sigmoide(self, z):
+        return 1 / (1 + np.exp(-z))
+
+    def treinar_modelo(self, X_treino, y_treino, taxa_aprendizado=0.01, epocas=1000):
+        self.pesos = np.zeros(X_treino.shape[1])
+        for _ in range(epocas):
+            modelo_linear = np.dot(X_treino, self.pesos) + self.bias
+            y_pred = self.sigmoide(modelo_linear)
+            erro = y_pred - y_treino
+            gradiente_pesos = np.dot(X_treino.T, erro) / X_treino.shape[0]
+            gradiente_bias = np.average(erro)
+            self.pesos -= taxa_aprendizado * gradiente_pesos
+            self.bias -= taxa_aprendizado * gradiente_bias
+
+    def prever(self, X):
+        modelo_linear = np.dot(X, self.pesos) + self.bias
+        return self.sigmoide(modelo_linear) >= 0.5
+
+    def calcular_metricas(self, y_verdadeiro, y_pred):
+        TP = np.sum((y_verdadeiro == 1) & (y_pred == 1))
+        TN = np.sum((y_verdadeiro == 0) & (y_pred == 0))
+        FP = np.sum((y_verdadeiro == 0) & (y_pred == 1))
+        FN = np.sum((y_verdadeiro == 1) & (y_pred == 0))
+        acuracia = (TP + TN) / (TP + TN + FP + FN)
+        revocacao = TP / (TP + FN) if (TP + FN) > 0 else 0
+        precisao = TP / (TP + FP) if (TP + FP) > 0 else 0
+        f1_score = 2 * (precisao * revocacao) / (precisao + revocacao) if (precisao + revocacao) > 0 else 0
+        return acuracia, revocacao, precisao, f1_score
+
+# Carregamento dos dados
+caminho_csv = '/content/drive/MyDrive/2024.1/Reconhecimento de Padrões/Tds/TD Final /fetal_health.csv'
+dados = pd.read_csv(caminho_csv)
+X = dados.iloc[:, :-1].values
+y = (dados.iloc[:, -1].values == 3).astype(int)  # Apenas para exemplo de binarização Patológico, Classe 3 do dataset
+X_normalizado = RegressaoLogistica().normalizar_dados(X)
+
+# Divisão entre treino e teste (80% treino, 20% teste)
+X_treino, X_teste, y_treino, y_teste = train_test_split(X_normalizado, y, test_size=0.2, random_state=42)
+
+# Grid Search para encontrar os melhores hiperparâmetros
+taxas_aprendizado = [0.001, 0.01, 0.1]
+epocas_list = [500, 1000, 2000]
+melhor_f1_score = -1
+melhores_hiperparametros = None
+
+# Início da contagem de tempo
+start_time = time.time()
+
+for taxa_aprendizado in taxas_aprendizado:
+    for epocas in epocas_list:
+        matriz_metricas_folds = np.zeros((10, 4))
+        indices = np.arange(len(X_treino))
+        np.random.shuffle(indices)
+        tamanho_fold = len(X_treino) // 10
+
+        for fold in range(10):
+            inicio_teste = fold * tamanho_fold
+            fim_teste = (fold + 1) * tamanho_fold if fold != 9 else len(X_treino)
+            teste_idx = indices[inicio_teste:fim_teste]
+            treino_idx = np.concatenate([indices[:inicio_teste], indices[fim_teste:]])
+
+            X_train_fold, X_val_fold = X_treino[treino_idx], X_treino[teste_idx]
+            y_train_fold, y_val_fold = y_treino[treino_idx], y_treino[teste_idx]
+
+            modelo = RegressaoLogistica()
+            modelo.treinar_modelo(X_train_fold, y_train_fold, taxa_aprendizado, epocas)
+
+            y_pred = modelo.prever(X_val_fold)
+            matriz_metricas_folds[fold] = modelo.calcular_metricas(y_val_fold, y_pred)
+
+        media_f1_score = np.mean(matriz_metricas_folds[:, 3])
+
+        if media_f1_score > melhor_f1_score:
+            melhor_f1_score = media_f1_score
+            melhores_hiperparametros = (taxa_aprendizado, epocas)
+
+# Fim da contagem de tempo
+end_time = time.time()
+execution_time = end_time - start_time
+
+# Exibir os melhores hiperparâmetros e o tempo de execução
+print(f"Melhores Hiperparâmetros: Taxa de aprendizado = {melhores_hiperparametros[0]}, Épocas = {melhores_hiperparametros[1]}")
+print(f"Tempo de execução do treinamento: {execution_time:.2f} segundos")
+
+# Treinamento do modelo final com os melhores hiperparâmetros
+modelo_final = RegressaoLogistica()
+modelo_final.treinar_modelo(X_treino, y_treino, taxa_aprendizado=melhores_hiperparametros[0], epocas=melhores_hiperparametros[1])
+
+# Avaliação do modelo com o conjunto de treino
+y_pred_treino = modelo_final.prever(X_treino)
+acuracia_treino, revocacao_treino, precisao_treino, f1_score_treino = modelo_final.calcular_metricas(y_treino, y_pred_treino)
+
+# Avaliação do modelo com o conjunto de teste
+y_pred_teste = modelo_final.prever(X_teste)
+acuracia_teste, revocacao_teste, precisao_teste, f1_score_teste = modelo_final.calcular_metricas(y_teste, y_pred_teste)
+
+# Exibição dos resultados
+print("\nResultados do Modelo C (80% Conjunto de Treino):")
+print(f"Acurácia: {acuracia_treino:.2f}")
+print(f"Revocação: {revocacao_treino:.2f}")
+print(f"Precisão: {precisao_treino:.2f}")
+print(f"F1-Score: {f1_score_treino:.2f}")
+
+print("\nResultados do Modelo C (20% Conjunto de Teste):")
+print(f"Acurácia: {acuracia_teste:.2f}")
+print(f"Revocação: {revocacao_teste:.2f}")
+print(f"Precisão: {precisao_teste:.2f}")
+print(f"F1-Score: {f1_score_teste:.2f}")
+
+# Plotando a matriz de confusão
+def plotar_matriz_confusao(matriz_confusao, titulo):
+    plt.figure(figsize=(10, 7))
+    sns.heatmap(matriz_confusao, annot=True, fmt='d', cmap='Blues', xticklabels=[0, 1], yticklabels=[0, 1])
+    plt.ylabel('Classe Verdadeira')
+    plt.xlabel('Classe Predita')
+    plt.title(titulo)
+    plt.show()
+
+# Matriz de confusão para o conjunto de treino
+matriz_confusao_treino = confusion_matrix(y_treino, y_pred_treino)
+plotar_matriz_confusao(matriz_confusao_treino, 'Matriz de Confusão - Modelo C (80% Conjunto de Treino)')
+
+# Matriz de confusão para o conjunto de teste
+matriz_confusao_teste = confusion_matrix(y_teste, y_pred_teste)
+plotar_matriz_confusao(matriz_confusao_teste, 'Matriz de Confusão - Modelo C (20% Conjunto de Teste)')
