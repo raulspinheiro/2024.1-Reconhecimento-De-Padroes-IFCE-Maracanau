@@ -1,0 +1,143 @@
+from google.colab import drive
+drive.mount('/content/drive')
+
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from catboost import CatBoostClassifier
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
+import time 
+import matplotlib.pyplot as plt
+
+# Carregando dados
+data = pd.read_csv('/content/drive/MyDrive/2024.1/Reconhecimento de Padrões/Tds/TD Final /fetal_health.csv')
+
+# Separar as features e o target
+X = data.drop(columns=['fetal_health'])
+y = data['fetal_health']
+
+# Dividir os dados em treino e teste (80% treino, 20% teste)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Função para calcular as métricas manualmente
+def calcular_metricas(y_verdadeiro, y_pred, num_classes=3):
+    matriz_confusao = confusion_matrix(y_verdadeiro, y_pred, labels=np.unique(y_verdadeiro))
+    acuracia = np.trace(matriz_confusao) / np.sum(matriz_confusao)
+
+    revocacao_por_classe = []
+    precisao_por_classe = []
+
+    for i in range(num_classes):
+        TP = matriz_confusao[i, i]
+        FN = np.sum(matriz_confusao[i, :]) - TP
+        FP = np.sum(matriz_confusao[:, i]) - TP
+        TN = np.sum(matriz_confusao) - (TP + FP + FN)
+
+        revocacao = TP / (TP + FN) if (TP + FN) > 0 else 0
+        precisao = TP / (TP + FP) if (TP + FP) > 0 else 0
+
+        revocacao_por_classe.append(revocacao)
+        precisao_por_classe.append(precisao)
+
+    revocacao_media = np.mean(revocacao_por_classe)
+    precisao_media = np.mean(precisao_por_classe)
+    f1_score_media = 2 * (precisao_media * revocacao_media) / (precisao_media + revocacao_media) if (precisao_media + revocacao_media) > 0 else 0
+
+    return acuracia, revocacao_media, precisao_media, f1_score_media
+
+# Configurar parâmetros para Grid Search
+learning_rates = [0.01, 0.1, 0.2]
+n_estimators = [100, 200, 300]
+best_f1_score = -1
+best_params = None
+
+# Validação Cruzada Manual com 10 Folds
+num_folds = 10
+indices = np.arange(len(X_train))
+np.random.shuffle(indices)
+fold_size = len(X_train) // num_folds
+
+# Início da contagem de tempo
+start_time = time.time()
+
+for lr in learning_rates:
+    for n_est in n_estimators:
+        fold_metrics = np.zeros((num_folds, 4))  # Armazenar métricas: acurácia, revocação, precisão, F1-score
+
+        for fold in range(num_folds):
+            start_idx = fold * fold_size
+            end_idx = (fold + 1) * fold_size if fold != num_folds - 1 else len(X_train)
+            val_idx = indices[start_idx:end_idx]
+            train_idx = np.concatenate([indices[:start_idx], indices[end_idx:]])
+
+            X_train_fold, X_val_fold = X_train.iloc[train_idx], X_train.iloc[val_idx]
+            y_train_fold, y_val_fold = y_train.iloc[train_idx], y_train.iloc[val_idx]
+
+            # Treinar o modelo CatBoost
+            model = CatBoostClassifier(learning_rate=lr, n_estimators=n_est, verbose=0)
+            model.fit(X_train_fold, y_train_fold)
+
+            # Fazer previsões
+            y_pred_val = model.predict(X_val_fold)
+
+            # Avaliar métricas
+            acuracia, revocacao, precisao, f1_score = calcular_metricas(y_val_fold, y_pred_val)
+            fold_metrics[fold] = [acuracia, revocacao, precisao, f1_score]
+
+        mean_f1_score = np.mean(fold_metrics[:, 3])
+
+        if mean_f1_score > best_f1_score:
+            best_f1_score = mean_f1_score
+            best_params = (lr, n_est)
+
+
+# Fim da contagem de tempo
+end_time = time.time()
+execution_time = end_time - start_time
+
+# Exibir os melhores hiperparâmetros e o tempo de execução
+print(f"Melhores Hiperparâmetros: Taxa de Aprendizado = {best_params[0]}, Número de Estimadores = {best_params[1]}")
+print(f"Tempo de execução do treinamento: {execution_time:.2f} segundos")
+
+def plot_confusion_matrix(y_true, y_pred, title):
+    cm = confusion_matrix(y_true, y_pred)
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=np.unique(y_true), yticklabels=np.unique(y_true))
+    plt.xlabel('Classe Predita')
+    plt.ylabel('Classe Verdadeira')
+    plt.title(title)
+    plt.show()
+
+# Treinamento do modelo final com os melhores hiperparâmetros
+final_model = CatBoostClassifier(learning_rate=best_params[0], n_estimators=best_params[1], verbose=0)
+final_model.fit(X_train, y_train)
+
+# Avaliar modelo com conjunto de treino
+y_pred_train = final_model.predict(X_train)
+accuracy_train, revocacao_train, precisao_train, f1_score_train = calcular_metricas(y_train, y_pred_train)
+
+# Avaliar modelo com conjunto de teste
+y_pred_test = final_model.predict(X_test)
+accuracy_test, revocacao_test, precisao_test, f1_score_test = calcular_metricas(y_test, y_pred_test)
+
+# Exibir resultados
+print("\nResultados do Modelo CatBoost (80% Conjunto de Treino):")
+print(f"Acurácia: {accuracy_train:.2f}")
+print(f"Revocação: {revocacao_train:.2f}")
+print(f"Precisão: {precisao_train:.2f}")
+print(f"F1-Score: {f1_score_train:.2f}")
+
+# Plotar matriz de confusão para o conjunto de treinamento
+
+plot_confusion_matrix(y_train, y_pred_train, 'Matriz de Confusão - CatBoost (80% Conjunto de Treinamento)')
+
+print("\nResultados do Modelo CatBoost (20% Conjunto de Teste):")
+print(f"Acurácia: {accuracy_test:.2f}")
+print(f"Revocação: {revocacao_test:.2f}")
+print(f"Precisão: {precisao_test:.2f}")
+print(f"F1-Score: {f1_score_test:.2f}")
+
+# Plotar matriz de confusão para o conjunto de teste
+
+plot_confusion_matrix(y_test, y_pred_test, 'Matriz de Confusão - CatBoost (20% Conjunto de Teste)')
