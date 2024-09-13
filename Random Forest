@@ -1,0 +1,152 @@
+from google.colab import drive
+drive.mount('/content/drive')
+
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import confusion_matrix, accuracy_score, classification_report
+import seaborn as sns
+import time 
+import matplotlib.pyplot as plt  
+
+# Carregar o arquivo CSV
+df = pd.read_csv('/content/drive/MyDrive/2024.1/Reconhecimento de Padrões/Tds/TD Final /fetal_health.csv')
+
+# Separar as features (X) e o alvo (y)
+X = df.drop('fetal_health', axis=1)
+y = df['fetal_health']
+
+# Normalização dos dados
+X = (X - np.min(X, axis=0)) / (np.max(X, axis=0) - np.min(X, axis=0))
+
+# Dividir os dados em conjuntos de treino e teste (80% treino e 20% teste)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Função para calcular as métricas manualmente
+def calcular_metricas(y_verdadeiro, y_pred, num_classes=3):
+    matriz_confusao = confusion_matrix(y_verdadeiro, y_pred, labels=[1, 2, 3])
+    acuracia = np.trace(matriz_confusao) / np.sum(matriz_confusao)
+
+    revocacao_por_classe = []
+    precisao_por_classe = []
+    for i in range(num_classes):
+        TP = matriz_confusao[i, i]
+        FN = np.sum(matriz_confusao[i, :]) - TP
+        FP = np.sum(matriz_confusao[:, i]) - TP
+        TN = np.sum(matriz_confusao) - (TP + FP + FN)
+
+        revocacao = TP / (TP + FN) if (TP + FN) > 0 else 0
+        precisao = TP / (TP + FP) if (TP + FP) > 0 else 0
+
+        revocacao_por_classe.append(revocacao)
+        precisao_por_classe.append(precisao)
+
+    revocacao_media = np.mean(revocacao_por_classe)
+    precisao_media = np.mean(precisao_por_classe)
+    f1_score_media = 2 * (precisao_media * revocacao_media) / (precisao_media + revocacao_media) if (precisao_media + revocacao_media) > 0 else 0
+
+    return acuracia, revocacao_media, precisao_media, f1_score_media
+
+# Validação cruzada manual (10-fold cross-validation)
+melhor_f1_score = -1
+melhores_hiperparametros = None
+
+# Usando 10 folds para validação cruzada
+folds = 10
+indices = np.arange(len(X_train))
+np.random.shuffle(indices)
+tamanho_fold = len(X_train) // folds
+
+# Definir os hiperparâmetros para buscar no Grid Search
+param_grid = {
+    'n_estimators': [50, 100, 200],
+    'max_depth': [None, 10, 20, 30],
+    'min_samples_split': [2, 5, 10]
+}
+
+# Início da contagem de tempo
+start_time = time.time()
+
+for fold in range(folds):
+    inicio_teste = fold * tamanho_fold
+    fim_teste = (fold + 1) * tamanho_fold if fold != folds - 1 else len(X_train)
+    teste_idx = indices[inicio_teste:fim_teste]
+    treino_idx = np.concatenate([indices[:inicio_teste], indices[fim_teste:]])
+
+    # Selecionar os dados de treino e validação usando .iloc
+    X_train_fold, X_val_fold = X_train.iloc[treino_idx], X_train.iloc[teste_idx]
+    y_train_fold, y_val_fold = y_train.iloc[treino_idx], y_train.iloc[teste_idx]
+
+    # Iterar pelos hiperparâmetros
+    for n_estimators in param_grid['n_estimators']:
+        for max_depth in param_grid['max_depth']:
+            for min_samples_split in param_grid['min_samples_split']:
+                # Treinar o modelo Random Forest com os hiperparâmetros
+                rf_model = RandomForestClassifier(
+                    n_estimators=n_estimators,
+                    max_depth=max_depth,
+                    min_samples_split=min_samples_split,
+                    random_state=42
+                )
+                rf_model.fit(X_train_fold, y_train_fold)
+
+                # Fazer previsões no conjunto de validação
+                y_pred_val = rf_model.predict(X_val_fold)
+                acuracia_val, revocacao_val, precisao_val, f1_score_val = calcular_metricas(y_val_fold, y_pred_val)
+
+                # Comparar F1-score e salvar os melhores hiperparâmetros
+                if f1_score_val > melhor_f1_score:
+                    melhor_f1_score = f1_score_val
+                    melhores_hiperparametros = {
+                        'n_estimators': n_estimators,
+                        'max_depth': max_depth,
+                        'min_samples_split': min_samples_split
+                    }
+
+# Fim da contagem de tempo
+end_time = time.time()
+execution_time = end_time - start_time
+
+# Exibir os melhores hiperparâmetros e o tempo de execução
+print(f"Melhores hiperparâmetros encontrados: {melhores_hiperparametros}")
+print(f"Tempo de execução do treinamento: {execution_time:.2f} segundos")
+
+# Plotar matriz de confusão
+def plot_confusion_matrix(y_true, y_pred, title):
+    cm = confusion_matrix(y_true, y_pred)
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=np.unique(y_true), yticklabels=np.unique(y_true))
+    plt.xlabel('Classe Predita')
+    plt.ylabel('Classe Verdadeira')
+    plt.title(title)
+    plt.show()
+
+# Treinamento do modelo final com os melhores hiperparâmetros
+modelo_final_rf = RandomForestClassifier(**melhores_hiperparametros, random_state=42)
+modelo_final_rf.fit(X_train, y_train)
+
+# Avaliação do modelo com o conjunto de treino (80%)
+y_pred_train = modelo_final_rf.predict(X_train)
+acuracia_train, revocacao_train, precisao_train, f1_score_train = calcular_metricas(y_train, y_pred_train)
+
+# Avaliação do modelo com o conjunto de teste (20%)
+y_pred_test = modelo_final_rf.predict(X_test)
+acuracia_test, revocacao_test, precisao_test, f1_score_test = calcular_metricas(y_test, y_pred_test)
+
+# Exibir os resultados
+print("\nResultados do Modelo Random Forest (80% Conjunto de Treino):")
+print(f"Acurácia: {acuracia_train:.2f}")
+print(f"Revocação: {revocacao_train:.2f}")
+print(f"Precisão: {precisao_train:.2f}")
+print(f"F1-Score: {f1_score_train:.2f}")
+
+plot_confusion_matrix(y_train, y_pred_train, 'Matriz de Confusão - Random Forest (80% Conjunto de Teste)')
+
+print("\nResultados do Modelo Random Forest (20% Conjunto de Teste):")
+print(f"Acurácia: {acuracia_test:.2f}")
+print(f"Revocação: {revocacao_test:.2f}")
+print(f"Precisão: {precisao_test:.2f}")
+print(f"F1-Score: {f1_score_test:.2f}")
+
+plot_confusion_matrix(y_test, y_pred_test, 'Matriz de Confusão - Random Forest (20% Conjunto de Teste)')
