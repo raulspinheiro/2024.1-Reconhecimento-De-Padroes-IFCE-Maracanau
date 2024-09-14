@@ -1,1 +1,0 @@
-# 2024.1-Reconhecimento-De-Padroes-IFCE-Maracanau
